@@ -7,3 +7,6 @@ config.json
 *.egg-info/
 .pytest_cache/
 signals/
+*.log
+*.png
+*.sh
