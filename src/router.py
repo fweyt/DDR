@@ -75,11 +75,16 @@ class Router:
             if self._rules_cache is not None:
                 return self._rules_cache
         with db_conn() as conn:
-            conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
-            any_rules = list(conn.execute("SELECT * FROM routing_rules WHERE state_base='any' AND match_type='keyword' ORDER BY priority"))
+            cursor = conn.cursor()
+            cursor.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+            any_rules = cursor.execute("SELECT * FROM routing_rules WHERE state_base='any' AND match_type='keyword' ORDER BY priority ASC").fetchall()
+            all_state_rows = cursor.execute("SELECT * FROM routing_rules WHERE state_base!='any' ORDER BY priority ASC").fetchall()
             state_rules = {}
-            for sb in {r["state_base"] for r in conn.execute("SELECT state_base FROM routing_rules WHERE state_base!='any'")}:
-                state_rules[sb] = list(conn.execute("SELECT * FROM routing_rules WHERE state_base=? ORDER BY priority", (sb,)))
+            for row in all_state_rows:
+                sb = row["state_base"]
+                if sb not in state_rules:
+                    state_rules[sb] = []
+                state_rules[sb].append(row)
         with self._cache_lock:
             self._rules_cache = (any_rules, state_rules)
             return self._rules_cache
@@ -87,6 +92,8 @@ class Router:
     def _find_rule(self, state_base: str, msg_lower: str) -> dict | None:
         any_rules, state_rules = self._load_rules()
         for row in any_rules:
+            if not row["match_value"]:
+                continue
             for kw in row["match_value"].split(","):
                 if kw.strip() and kw.strip() in msg_lower:
                     return row
