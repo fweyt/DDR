@@ -1,0 +1,12 @@
+{
+    "llm": {
+        "api_url": "http://localhost:11434",
+        "api_key": "",
+        "model": "llama3.2",
+        "mock": true
+    },
+    "signal": {
+        "api_url": "http://localhost:8080",
+        "number": "+32XXXXXXXXX"
+    }
+}
