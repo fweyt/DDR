@@ -37,6 +37,7 @@ class Router:
         mock = self.llm_config.get("mock", False)
         self._receptionist = RuleBasedNurse() if mock else LLMAdapter(self.llm_config, "receptionist")
         self._specialists: dict = {}
+        self._specialist_creation_lock = threading.Lock()
         self._ensure_default_rules()
         if not mock:
             with db_conn() as conn:
@@ -89,23 +90,27 @@ class Router:
             self._rules_cache = (any_rules, state_rules)
             return self._rules_cache
 
-    def _find_rule(self, state_base: str, msg_lower: str) -> dict | None:
+    def _find_rule(self, state: str, msg_lower: str) -> dict | None:
         any_rules, state_rules = self._load_rules()
         for row in any_rules:
-            if not row["match_value"]:
-                continue
-            for kw in row["match_value"].split(","):
-                if kw.strip() and kw.strip() in msg_lower:
-                    return row
-        rules = state_rules.get(state_base, [])
-        for row in rules:
-            if row["match_type"] == "keyword" and row["match_value"]:
+            if row["match_value"]:
                 for kw in row["match_value"].split(","):
                     if kw.strip() and kw.strip() in msg_lower:
                         return row
-        for row in rules:
-            if row["match_type"] in ("auto", "llm_route", "fallback"):
-                return row
+        for candidate in (state, state.split(":")[0] if ":" in state else None):
+            if candidate is None:
+                continue
+            rules = state_rules.get(candidate, [])
+            for row in rules:
+                if row["match_type"] == "keyword" and row["match_value"]:
+                    for kw in row["match_value"].split(","):
+                        if kw.strip() and kw.strip() in msg_lower:
+                            return row
+            if candidate == state:
+                continue
+            for row in rules:
+                if row["match_type"] in ("auto", "llm_route", "fallback"):
+                    return row
         return None
 
     def _context(self, sender: str) -> str:
@@ -116,7 +121,7 @@ class Router:
         state = conv["state"]
         msg_lower = message.lower().strip()
         add_to_history(sender, "user", message)
-        rule = self._find_rule(state.split(":")[0] if ":" in state else state, msg_lower)
+        rule = self._find_rule(state, msg_lower)
         if rule:
             return self._execute_rule(rule, sender, state, message, status_callback)
         if state.startswith("active:") and ":" in state:
@@ -193,25 +198,28 @@ class Router:
     def _ensure_specialist(self, name: str, description: str | None = None) -> bool:
         if name in self._specialists:
             return True
-        if self.llm_config.get("mock", False):
-            self._specialists[name] = RuleBasedNurse()
+        with self._specialist_creation_lock:
+            if name in self._specialists:
+                return True
+            if self.llm_config.get("mock", False):
+                self._specialists[name] = RuleBasedNurse()
+                return True
+            topic = description or name
+            try:
+                import requests
+                r = requests.post(
+                    f"{self.llm_config.get('api_url', 'https://api.groq.com/openai/v1')}/chat/completions",
+                    json={"model": self.llm_config.get("model", "llama-3.3-70b-versatile"), "messages": [{"role": "user", "content": f"Write a short system prompt (max 5 sentences, in English) for an AI assistant that is an expert in: {topic}. Describe their expertise, their style of answering, and that they should be concise (max 3-4 sentences). Only the prompt, no explanation."}]},
+                    headers={"Authorization": f"Bearer {self.llm_config.get('api_key', '')}", "Content-Type": "application/json"},
+                    timeout=30,
+                )
+                r.raise_for_status()
+                (_PROMPTS_DIR / f"{name}.md").write_text(r.json()["choices"][0]["message"]["content"].strip())
+                self._specialists[name] = LLMAdapter(self.llm_config, name)
+            except:
+                return False
+            self._register_specialist_in_db(name, topic)
             return True
-        topic = description or name
-        try:
-            import requests
-            r = requests.post(
-                f"{self.llm_config.get('api_url', 'https://api.groq.com/openai/v1')}/chat/completions",
-                json={"model": self.llm_config.get("model", "llama-3.3-70b-versatile"), "messages": [{"role": "user", "content": f"Write a short system prompt (max 5 sentences, in English) for an AI assistant that is an expert in: {topic}. Describe their expertise, their style of answering, and that they should be concise (max 3-4 sentences). Only the prompt, no explanation."}]},
-                headers={"Authorization": f"Bearer {self.llm_config.get('api_key', '')}", "Content-Type": "application/json"},
-                timeout=30,
-            )
-            r.raise_for_status()
-            (_PROMPTS_DIR / f"{name}.md").write_text(r.json()["choices"][0]["message"]["content"].strip())
-            self._specialists[name] = LLMAdapter(self.llm_config, name)
-        except:
-            return False
-        self._register_specialist_in_db(name, topic)
-        return True
 
     def get_specialist_name(self, service: str) -> str:
         return self._persona_cache.get(service) or service.replace("-", " ").title()
