@@ -1,34 +1,41 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .init_db import db_conn
 
 
 def get_or_create(sender: str) -> dict:
+    now_iso = datetime.now(timezone.utc).isoformat()
     with db_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO conversations (sender, state, history, created_at, updated_at) "
+            "VALUES (?, 'new', '[]', ?, ?)",
+            (sender, now_iso, now_iso),
+        )
         row = conn.execute(
             "SELECT state, history, created_at, updated_at FROM conversations WHERE sender=?",
             (sender,),
         ).fetchone()
-        if row:
-            return {"sender": sender, "state": row[0], "history": json.loads(row[1]),
-                    "created_at": row[2], "updated_at": row[3]}
-        conn.execute(
-            "INSERT INTO conversations (sender, state, history) VALUES (?, 'new', '[]')",
-            (sender,),
-        )
-        return {"sender": sender, "state": "new", "history": [], "created_at": None, "updated_at": None}
+    return {
+        "sender": sender,
+        "state": row[0],
+        "history": json.loads(row[1]),
+        "created_at": row[2],
+        "updated_at": row[3],
+    }
 
 
 def set_state(sender: str, state: str) -> None:
+    now_iso = datetime.now(timezone.utc).isoformat()
     with db_conn() as conn:
         conn.execute(
             "UPDATE conversations SET state=?, updated_at=? WHERE sender=?",
-            (state, datetime.utcnow().isoformat(), sender),
+            (state, now_iso, sender),
         )
 
 
 def add_to_history(sender: str, role: str, content: str) -> list:
+    now_iso = datetime.now(timezone.utc).isoformat()
     with db_conn() as conn:
         row = conn.execute("SELECT history FROM conversations WHERE sender=?", (sender,)).fetchone()
         if not row:
@@ -38,9 +45,9 @@ def add_to_history(sender: str, role: str, content: str) -> list:
         history = history[-20:]
         conn.execute(
             "UPDATE conversations SET history=?, updated_at=? WHERE sender=?",
-            (json.dumps(history), datetime.utcnow().isoformat(), sender),
+            (json.dumps(history), now_iso, sender),
         )
-        return history
+    return history
 
 
 def get_history(sender: str) -> list:
