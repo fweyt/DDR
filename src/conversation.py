@@ -1,7 +1,11 @@
 import json
+from collections import defaultdict
 from datetime import datetime, timezone
+from threading import Lock
 
 from .init_db import db_conn
+
+_sender_locks: dict[str, Lock] = defaultdict(Lock)
 
 
 def get_or_create(sender: str) -> dict:
@@ -36,17 +40,18 @@ def set_state(sender: str, state: str) -> None:
 
 def add_to_history(sender: str, role: str, content: str) -> list:
     now_iso = datetime.now(timezone.utc).isoformat()
-    with db_conn() as conn:
-        row = conn.execute("SELECT history FROM conversations WHERE sender=?", (sender,)).fetchone()
-        if not row:
-            return []
-        history = json.loads(row[0])
-        history.append({"role": role, "content": content})
-        history = history[-20:]
-        conn.execute(
-            "UPDATE conversations SET history=?, updated_at=? WHERE sender=?",
-            (json.dumps(history), now_iso, sender),
-        )
+    with _sender_locks[sender]:
+        with db_conn() as conn:
+            row = conn.execute("SELECT history FROM conversations WHERE sender=?", (sender,)).fetchone()
+            if not row:
+                return []
+            history = json.loads(row[0])
+            history.append({"role": role, "content": content})
+            history = history[-20:]
+            conn.execute(
+                "UPDATE conversations SET history=?, updated_at=? WHERE sender=?",
+                (json.dumps(history), now_iso, sender),
+            )
     return history
 
 
