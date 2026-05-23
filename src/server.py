@@ -53,7 +53,7 @@ async def _dispatch_loop() -> None:
                 with db_conn() as conn:
                     conn.execute("UPDATE message_queue SET status='processing' WHERE id=?", (msg_id,))
                 await asyncio.to_thread(_handle_message, msg_id, sender, message)
-        except:
+        except Exception:
             await asyncio.sleep(1)
 
 
