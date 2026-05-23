@@ -4,6 +4,7 @@ import pytest
 
 from src import server
 from src.init_db import init_db
+from src.nurse import RuleBasedNurse
 
 
 class _MockSignalSender:
@@ -23,6 +24,11 @@ def _db_setup(monkeypatch):
     yield
     import os
     os.unlink(db.name)
+
+
+@pytest.fixture(autouse=True)
+def _use_rule_based_nurse(monkeypatch):
+    monkeypatch.setattr(server, "_nurse", RuleBasedNurse())
 
 
 @pytest.fixture(autouse=True)

@@ -12,11 +12,11 @@ from .signal_sender import SignalSender
 config = load_config()
 init_db()
 
-_nurse: RuleBasedNurse | LLMAdapter
-if config.get("llm", {}).get("mock", True):
+_nurse: LLMAdapter | RuleBasedNurse
+if config.get("llm", {}).get("mock", False):
     _nurse = RuleBasedNurse()
 else:
-    _nurse = LLMAdapter(config["llm"])
+    _nurse = LLMAdapter(config.get("llm", {}))
 
 _signal = SignalSender(config.get("signal", {}))
 
