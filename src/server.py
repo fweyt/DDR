@@ -26,15 +26,6 @@ def _queue_message(sender: str, message: str) -> None:
     _queue_ready.set()
 
 
-def _process_one() -> bool:
-    with db_conn() as conn:
-        row = conn.execute("SELECT id, sender, message FROM message_queue WHERE status='pending' ORDER BY id ASC LIMIT 1").fetchone()
-        if not row:
-            return False
-        _handle_message(row[0], row[1], row[2])
-    return True
-
-
 def _handle_message(msg_id: int, sender: str, message: str) -> None:
     try:
         reply = _router.handle(sender, message)
@@ -52,15 +43,18 @@ def _handle_message(msg_id: int, sender: str, message: str) -> None:
 async def _dispatch_loop() -> None:
     while True:
         try:
-            await _queue_ready.wait()
             _queue_ready.clear()
             with db_conn() as conn:
                 rows = conn.execute("SELECT id, sender, message FROM message_queue WHERE status='pending' ORDER BY id ASC").fetchall()
+            if not rows:
+                await _queue_ready.wait()
+                continue
             for msg_id, sender, message in rows:
                 with db_conn() as conn:
                     conn.execute("UPDATE message_queue SET status='processing' WHERE id=?", (msg_id,))
-                asyncio.create_task(asyncio.to_thread(_handle_message, msg_id, sender, message))
-        except: pass
+                await asyncio.to_thread(_handle_message, msg_id, sender, message)
+        except:
+            await asyncio.sleep(1)
 
 
 async def _signal_receiver() -> None:
@@ -107,7 +101,9 @@ async def chat_websocket(websocket: WebSocket):
                     asyncio.run_coroutine_threadsafe(websocket.send_json({"status": msg}), loop)
                 reply = await asyncio.to_thread(_router.handle, sender, data.get("text", ""), progress)
                 state = get_or_create(sender)["state"]
-                persona = _router.get_specialist_name(state.split(":", 1)[1]) if state.startswith("active:") else "Receptionist"
+                persona = "Receptionist"
+                if state.startswith("active:") and ":" in state:
+                    persona = _router.get_specialist_name(state.split(":", 1)[1])
                 await websocket.send_json({"text": reply, "sender": persona})
             except Exception as e:
                 await websocket.send_json({"error": str(e)})
