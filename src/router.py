@@ -97,20 +97,24 @@ class Router:
                 for kw in row["match_value"].split(","):
                     if kw.strip() and kw.strip() in msg_lower:
                         return row
-        for candidate in (state, state.split(":")[0] if ":" in state else None):
-            if candidate is None:
-                continue
-            rules = state_rules.get(candidate, [])
-            for row in rules:
+        rules = state_rules.get(state, [])
+        for row in rules:
+            if row["match_type"] == "keyword" and row["match_value"]:
+                for kw in row["match_value"].split(","):
+                    if kw.strip() and kw.strip() in msg_lower:
+                        return row
+        state_base = state.split(":")[0] if ":" in state else state
+        if state_base != state:
+            base_rules = state_rules.get(state_base, [])
+            for row in base_rules:
                 if row["match_type"] == "keyword" and row["match_value"]:
                     for kw in row["match_value"].split(","):
                         if kw.strip() and kw.strip() in msg_lower:
                             return row
-            if candidate == state:
-                continue
-            for row in rules:
-                if row["match_type"] in ("auto", "llm_route", "fallback"):
-                    return row
+            rules = base_rules
+        for row in rules:
+            if row["match_type"] in ("auto", "llm_route", "fallback"):
+                return row
         return None
 
     def _context(self, sender: str) -> str:
