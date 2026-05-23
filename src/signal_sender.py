@@ -18,6 +18,12 @@ class SignalSender:
                 json=payload,
                 timeout=15,
             )
-            return resp.status_code in (200, 201)
+            if resp.status_code not in (200, 201):
+                return False
+            data = resp.json()
+            if isinstance(data, dict):
+                if recipient in data.get("unregisteredRecipients", []) or recipient in data.get("failedRecipients", []):
+                    return False
+            return True
         except requests.RequestException:
             return False
