@@ -44,17 +44,30 @@ class Router:
 
     def _ensure_default_rules(self) -> None:
         with db_conn() as conn:
-            if conn.execute("SELECT COUNT(*) FROM routing_rules").fetchone()[0] > 0:
-                return
-            conn.executemany(
-                "INSERT INTO routing_rules (state_base,match_type,match_value,target_state,specialist_name,prompt_file,priority) VALUES (?,?,?,?,?,?,?)",
-                _DEFAULT_RULES,
-            )
+            if conn.execute("SELECT COUNT(*) FROM routing_rules").fetchone()[0] == 0:
+                conn.executemany(
+                    "INSERT INTO routing_rules (state_base,match_type,match_value,target_state,specialist_name,prompt_file,priority) VALUES (?,?,?,?,?,?,?)",
+                    _DEFAULT_RULES,
+                )
             for svc_name, svc_cfg in self.services.items():
+                keywords = svc_name.lower().replace("-", " ").replace("_", " ")
+                exists = conn.execute("SELECT 1 FROM routing_rules WHERE state_base='triage' AND match_type='keyword' AND match_value=?", (keywords,)).fetchone()
+                if not exists:
+                    conn.execute(
+                        "INSERT INTO routing_rules (state_base,match_type,match_value,target_state,specialist_name,prompt_file,priority) VALUES ('triage','keyword',?,?,?,?,5)",
+                        (keywords, f"active:{svc_name}", svc_cfg.get("name", svc_name), svc_cfg.get("prompt", svc_name)),
+                    )
+
+    def _register_specialist_in_db(self, name: str, topic: str) -> None:
+        keywords = name.lower().replace("-", " ").replace("_", " ")
+        with db_conn() as conn:
+            exists = conn.execute("SELECT 1 FROM routing_rules WHERE state_base='triage' AND match_type='keyword' AND match_value=?", (keywords,)).fetchone()
+            if not exists:
                 conn.execute(
                     "INSERT INTO routing_rules (state_base,match_type,match_value,target_state,specialist_name,prompt_file,priority) VALUES ('triage','keyword',?,?,?,?,5)",
-                    (svc_name.lower().replace("-", " ").replace("_", " "), f"active:{svc_name}", svc_cfg.get("name", svc_name), svc_cfg.get("prompt", svc_name)),
+                    (keywords, f"active:{name}", name.replace("-", " ").title(), name),
                 )
+        self._rules_cache = None
 
     def _load_rules(self) -> tuple:
         if self._rules_cache is not None:
@@ -187,4 +200,5 @@ class Router:
                     cfg["services"][name] = {"name": name.replace("-", " ").title(), "prompt": name, "description": topic}
                     cfg_path.write_text(json.dumps(cfg, indent=4))
             except: pass
+        self._register_specialist_in_db(name, topic)
         return True
