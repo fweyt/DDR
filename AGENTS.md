@@ -48,3 +48,8 @@ uvicorn src.server:app --host 0.0.0.0 --port 5000
 ```bash
 docker compose -f container/docker-compose.yml up --build
 ```
+
+## Operationele notities
+
+- **prompts/ schrijfrechten**: `_ensure_specialist()` schrijft dynamisch `prompts/{naam}.md`. Zorg dat het proces (Docker container of lokale user) write-toegang heeft op deze map. In de docker-compose wordt `../prompts:/app/prompts` gemount — check dat de host-map bestaat en writebaar is.
+- **Signal-nummer in URL**: Bij sommige versies van signal-cli-rest-api moet de `+` in het telefoonnummer URL-geëncode worden als `%2B` in de WebSocket URL (`/v1/receive/%2B233594051553`). Als de initiële connectie hapert, probeer dan deze variant.
