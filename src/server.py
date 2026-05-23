@@ -6,17 +6,17 @@ from fastapi import FastAPI, Request
 
 from .config import load_config
 from .init_db import DB_PATH, init_db
-from .nurse import LLMAdapter, MockLLM
+from .nurse import LLMAdapter, RuleBasedNurse
 from .signal_sender import SignalSender
 
 config = load_config()
 init_db()
 
-_llm: LLMAdapter | MockLLM
-if config.get("llm", {}).get("mock", False):
-    _llm = MockLLM()
+_nurse: RuleBasedNurse | LLMAdapter
+if config.get("llm", {}).get("mock", True):
+    _nurse = RuleBasedNurse()
 else:
-    _llm = LLMAdapter(config["llm"])
+    _nurse = LLMAdapter(config["llm"])
 
 _signal = SignalSender(config.get("signal", {}))
 
@@ -45,7 +45,7 @@ def _process_one() -> bool:
     conn.execute("UPDATE message_queue SET status='processing' WHERE id=?", (msg_id,))
     conn.commit()
 
-    reply = _llm.generate(message)
+    reply = _nurse.generate(message)
 
     if _signal.send(sender, reply):
         conn.execute(
