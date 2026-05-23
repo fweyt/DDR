@@ -7,15 +7,35 @@ class LLMAdapter:
     """
     Nurse backend using an external LLM via OpenAI-compatible API.
     Reads prompts/*.md as the system prompt harness.
+
+    Defaults to OpenCode Zen (free for Big Pickle).
+    API key is auto-detected from ~/.local/share/opencode/auth.json
+    if not provided in config.
     """
 
+    _ZEN_URL = "https://opencode.ai/zen/v1"
+    _ZEN_AUTH = Path.home() / ".local/share/opencode/auth.json"
+
     def __init__(self, config: dict) -> None:
-        self.api_url = config["api_url"].rstrip("/")
+        self.api_url = config.get("api_url", self._ZEN_URL).rstrip("/")
         self.api_key = config.get("api_key", "")
-        self.model = config.get("model", "gpt-4o")
+        self.model = config.get("model", "big-pickle")
+        if not self.api_key:
+            self._zen_key()
         self.system_prompt = self._read("system_prompt.md")
         self.triage_protocol = self._read("triage_protocol.md")
         self.knowledge_base = self._read("knowledge_base.md")
+
+    def _zen_key(self) -> None:
+        try:
+            if self._ZEN_AUTH.exists():
+                import json
+                data = json.loads(self._ZEN_AUTH.read_text())
+                key = data.get("opencode", {}).get("key", "")
+                if key:
+                    self.api_key = key
+        except Exception:
+            pass
 
     def _read(self, name: str) -> str:
         path = Path(__file__).resolve().parent.parent / "prompts" / name
