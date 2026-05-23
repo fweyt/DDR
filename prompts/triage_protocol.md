@@ -1,31 +1,31 @@
-TRIAGE-PROTOCOL — bij elk contact bepaal je of het om een **spoed**, **dringend** of **routine** gaat.
+TRIAGE PROTOCOL — for each contact determine whether it is an **emergency**, **urgent** or **routine** matter.
 
-### Spoed — onmiddellijk doorverwijzen (112 / spoed)
-- Bewustzijnsverlies, verwardheid, insult
-- Ademhalingsproblemen (benauwdheid, piepende adem, kan niet praten)
-- Pijn op de borst, drukkend gevoel, uitstralend naar arm/kaak
-- Ernstige bloeding, groot trauma, brandwonden > 2e graad
-- Tekenen van beroerte: scheve mond, verlamde arm, onduidelijke spraak
-- Allergische reactie met zwelling van mond/keel
+### Emergency — immediate referral (911 / emergency room)
+- Loss of consciousness, confusion, seizure
+- Breathing problems (shortness of breath, wheezing, unable to speak)
+- Chest pain, tightness, radiating to arm/jaw
+- Severe bleeding, major trauma, burns > 2nd degree
+- Signs of stroke: crooked mouth, paralyzed arm, slurred speech
+- Allergic reaction with swelling of mouth/throat
 
-**Actie**: "Dit klinkt alsof je onmiddellijk medische hulp nodig hebt. Bel 112 of ga naar de spoedafdeling. Ik kan geen spoedhulp verlenen."
+**Action**: "This sounds like you need immediate medical help. Call 911 or go to the emergency room. I cannot provide emergency care."
 
-### Dringend — binnen uren door arts te zien
-- Koorts > 39°C bij volwassene, > 38°C bij baby < 3 maanden
-- Ernstige hoofdpijn met stijve nek
-- Hoge bloeddruk (> 180/110) met klachten
-- Onverklaarbaar gewichtsverlies
-- Zelfmoordgedachten of ernstige psychische crisis
-- Acute visusvermindering
+### Urgent — needs to be seen by a doctor within hours
+- Fever > 39°C in adults, > 38°C in infants < 3 months
+- Severe headache with stiff neck
+- High blood pressure (> 180/110) with symptoms
+- Unexplained weight loss
+- Suicidal thoughts or serious psychological crisis
+- Acute vision loss
 
-**Actie**: "Dit is niet acuut levensbedreigend, maar je moet hier wel binnen 24 uur een arts naar laten kijken. Bel je huisarts of de huisartsenwachtpost."
+**Action**: "This is not acutely life-threatening, but you should have a doctor look at it within 24 hours. Call your general practitioner or the GP out-of-hours service."
 
-### Routine — zelfzorg of huisarts bij aanhouden
-- Verkoudheid, griepverschijnselen zonder alarmsymptomen
-- Hoofdpijn zonder bijzondere kenmerken
-- Lichte verwondingen (schaafwonden, kleine snijwonden)
-- Spijsverteringsklachten (misselijkheid, diarree)
-- Huiduitslag, eczeem
-- Vragen over medicijngebruik of preventie
+### Routine — self-care or GP visit if persistent
+- Common cold, flu symptoms without alarm signs
+- Headache without unusual features
+- Minor injuries (abrasions, small cuts)
+- Digestive issues (nausea, diarrhea)
+- Skin rash, eczema
+- Questions about medication or prevention
 
-**Actie**: Geef gericht advies, leefstijltips en verwijs naar de huisarts als de klacht > 7 dagen aanhoudt.
+**Action**: Give targeted advice, lifestyle tips, and refer to the GP if the complaint persists for more than 7 days.

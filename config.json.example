@@ -1,12 +1,13 @@
 {
     "llm": {
-        "api_url": "https://opencode.ai/zen/v1",
-        "api_key": "",
-        "model": "big-pickle",
+        "api_url": "https://api.groq.com/openai/v1",
+        "api_key": "your-groq-api-key-here",
+        "model": "llama-3.3-70b-versatile",
         "mock": false
     },
     "signal": {
         "api_url": "http://localhost:8080",
         "number": "+32XXXXXXXXX"
-    }
+    },
+    "services": {}
 }

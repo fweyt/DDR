@@ -28,7 +28,7 @@ def _db_setup(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _use_rule_based_nurse(monkeypatch):
-    monkeypatch.setattr(server, "_nurse", RuleBasedNurse())
+    monkeypatch.setattr(server, "_router", RuleBasedNurse())
 
 
 @pytest.fixture(autouse=True)

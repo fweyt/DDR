@@ -17,5 +17,14 @@ def init_db(db_path: str | None = None) -> None:
             created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS conversations (
+            sender      TEXT PRIMARY KEY,
+            state       TEXT NOT NULL DEFAULT 'new',
+            history     TEXT NOT NULL DEFAULT '[]',
+            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()

@@ -1,20 +1,13 @@
-FROM debian:12-slim
-
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-venv \
-    sqlite3 \
-    curl \
-    docker.io \
-    && rm -rf /var/lib/apt/lists/*
+FROM python:3.12-slim
 
 WORKDIR /app
-COPY . /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-RUN python3 -m venv /venv && \
-    /venv/bin/pip install --no-cache-dir -r requirements.txt
+COPY src/ src/
+COPY prompts/ prompts/
+COPY config.json .
 
 EXPOSE 5000
 
-CMD ["/venv/bin/python", "-m", "uvicorn", "src.server:app", "--host", "0.0.0.0", "--port", "5000"]
+CMD ["uvicorn", "src.server:app", "--host", "0.0.0.0", "--port", "5000"]

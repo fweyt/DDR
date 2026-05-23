@@ -3,17 +3,13 @@ services:
     build:
       context: ..
       dockerfile: container/Dockerfile
-    container_name: ai-hulpservice
+    container_name: ai-service
     restart: unless-stopped
     ports:
       - "5000:5000"
     volumes:
-      - ../messages.db:/app/messages.db
       - ../config.json:/app/config.json
       - ../prompts:/app/prompts
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - DOCKER_HOST=unix:///var/run/docker.sock
 
   signal-api:
     image: bbernhard/signal-cli-rest-api:latest
