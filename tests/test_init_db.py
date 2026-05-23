@@ -4,15 +4,17 @@ import tempfile
 from src.init_db import init_db
 
 
-def test_init_db_creates_table():
+def test_init_db_creates_tables():
     with tempfile.NamedTemporaryFile(suffix=".db") as f:
         init_db(f.name)
         conn = sqlite3.connect(f.name)
-        tables = conn.execute(
+        tables = [r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        ).fetchall()]
         conn.close()
-    assert ("message_queue",) in tables
+    assert "message_queue" in tables
+    assert "conversations" in tables
+    assert "routing_rules" in tables
 
 
 def test_init_db_is_idempotent(tmp_path):

@@ -4,7 +4,7 @@ import pytest
 
 from src import server
 from src.init_db import init_db
-from src.nurse import RuleBasedNurse
+from src.router import Router
 
 
 class _MockSignalSender:
@@ -19,7 +19,8 @@ class _MockSignalSender:
 @pytest.fixture(autouse=True)
 def _db_setup(monkeypatch):
     db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    monkeypatch.setattr(server, "DB_PATH", db.name)
+    import src.init_db as init_db_mod
+    monkeypatch.setattr(init_db_mod, "DB_PATH", db.name)
     init_db(db.name)
     yield
     import os
@@ -27,8 +28,11 @@ def _db_setup(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _use_rule_based_nurse(monkeypatch):
-    monkeypatch.setattr(server, "_router", RuleBasedNurse())
+def _use_mock_router(monkeypatch):
+    monkeypatch.setattr(
+        server, "_router",
+        Router({"llm": {"mock": True}, "services": {}}),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +43,7 @@ def _mock_signal(monkeypatch):
 @pytest.fixture
 def db_conn():
     import sqlite3
-    conn = sqlite3.connect(server.DB_PATH)
+    from src.init_db import DB_PATH
+    conn = sqlite3.connect(DB_PATH)
     yield conn
     conn.close()

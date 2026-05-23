@@ -2,53 +2,162 @@ import json
 import re
 from pathlib import Path
 
-from .conversation import (
-    STATE_NEW,
-    STATE_TRIAGE,
-    STATE_OFFERED,
-    STATE_ACTIVE,
-    add_to_history,
-    delete,
-    get_history,
-    get_or_create,
-    set_state,
-)
+from .conversation import add_to_history, delete, get_history, get_or_create, set_state
+from .init_db import db_conn
 from .nurse import LLMAdapter, RuleBasedNurse
 
 _ROUTE_RE = re.compile(r"\s*\[ROUTE:([\w-]+)(?::([^]]+))?\]")
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
+_DEFAULT_RULES = [
+    ("any", "keyword", "new conversation,other service,something else,another question,back to start,reset,again,different topic", "triage", "", "", 10),
+    ("new", "auto", "", "triage", "", "", 0),
+    ("triage", "llm_route", "", "", "", "", 0),
+    ("offered", "confirm", "yes,ok,okay,please,connect,go ahead,fine,do it,sure", "active:same", "", "", 20),
+    ("offered", "deny", "no,not,none,rather not,other,different", "triage", "", "", 20),
+    ("active", "fallback", "", "", "", "", 0),
+]
+
+_DISPATCH = {
+    "auto": "_exec_triage",
+    "llm_route": "_exec_triage",
+    "confirm": "_exec_confirm",
+    "deny": "_exec_deny",
+    "fallback": "_exec_fallback",
+    "keyword": "_exec_keyword",
+}
 
 
 class Router:
     def __init__(self, config: dict) -> None:
         self.llm_config = config.get("llm", {})
         self.services = config.get("services", {})
-        self._prompt_cache: dict[str, str] = {}
+        self._rules_cache: tuple | None = None
         mock = self.llm_config.get("mock", False)
-
         if mock:
             self._receptionist = RuleBasedNurse()
-            self._specialists: dict = {}
-            for name in self.services:
-                self._specialists[name] = RuleBasedNurse()
+            self._specialists: dict = {n: RuleBasedNurse() for n in self.services}
         else:
             self._receptionist = LLMAdapter(self.llm_config, "receptionist")
-            self._specialists: dict = {}
-            for name, svc in self.services.items():
-                prompt = svc.get("prompt", name)
-                self._specialists[name] = LLMAdapter(self.llm_config, prompt)
+            self._specialists: dict = {n: LLMAdapter(self.llm_config, s.get("prompt", n)) for n, s in self.services.items()}
+        self._ensure_default_rules()
 
-    _RESET_WORDS = [
-        "new conversation", "other service", "something else", "another question",
-        "back to start", "reset", "again", "different topic",
-    ]
-    _SERVICE_NAMES = [
-        "nurse", "medical",
-        "tech", "technical", "computer",
-        "investing", "investment advisor", "investment",
-        "programmer", "coding", "software",
-        "fluidyne", "stirling", "engine",
-    ]
+    def _ensure_default_rules(self) -> None:
+        with db_conn() as conn:
+            if conn.execute("SELECT COUNT(*) FROM routing_rules").fetchone()[0] > 0:
+                return
+            conn.executemany(
+                "INSERT INTO routing_rules (state_base,match_type,match_value,target_state,specialist_name,prompt_file,priority) VALUES (?,?,?,?,?,?,?)",
+                _DEFAULT_RULES,
+            )
+            for svc_name, svc_cfg in self.services.items():
+                conn.execute(
+                    "INSERT INTO routing_rules (state_base,match_type,match_value,target_state,specialist_name,prompt_file,priority) VALUES ('triage','keyword',?,?,?,?,5)",
+                    (svc_name.lower().replace("-", " ").replace("_", " "), f"active:{svc_name}", svc_cfg.get("name", svc_name), svc_cfg.get("prompt", svc_name)),
+                )
+
+    def _load_rules(self) -> tuple:
+        if self._rules_cache is not None:
+            return self._rules_cache
+        with db_conn() as conn:
+            conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+            any_rules = list(conn.execute("SELECT * FROM routing_rules WHERE state_base='any' AND match_type='keyword' ORDER BY priority"))
+            state_rules = {}
+            for sb in {r["state_base"] for r in conn.execute("SELECT state_base FROM routing_rules WHERE state_base!='any'")}:
+                state_rules[sb] = list(conn.execute("SELECT * FROM routing_rules WHERE state_base=? ORDER BY priority", (sb,)))
+        self._rules_cache = (any_rules, state_rules)
+        return self._rules_cache
+
+    def _find_rule(self, state_base: str, msg_lower: str) -> dict | None:
+        any_rules, state_rules = self._load_rules()
+        for row in any_rules:
+            for kw in row["match_value"].split(","):
+                if kw.strip() and kw.strip() in msg_lower:
+                    return row
+        for row in state_rules.get(state_base, []):
+            mt, mv = row["match_type"], row["match_value"]
+            if mt in ("auto", "llm_route", "fallback"):
+                return row
+            for kw in mv.split(","):
+                if kw.strip() and kw.strip() in msg_lower:
+                    return row
+        return None
+
+    def _context(self, sender: str) -> str:
+        return "\n".join(f"{'User' if h['role'] == 'user' else 'You'}: {h['content']}" for h in get_history(sender))
+
+    def handle(self, sender: str, message: str, status_callback=None) -> str:
+        conv = get_or_create(sender)
+        state = conv["state"]
+        msg_lower = message.lower().strip()
+        add_to_history(sender, "user", message)
+        rule = self._find_rule(state.split(":")[0] if ":" in state else state, msg_lower)
+        if rule:
+            return self._execute_rule(rule, sender, state, message, status_callback)
+        if state.startswith("active:"):
+            return self._active(sender, state.split(":", 1)[1], message)
+        set_state(sender, "triage")
+        return self._triage(sender, message, status_callback)
+
+    def _execute_rule(self, rule: dict, sender: str, state: str, message: str, status_callback=None) -> str:
+        if rule["match_type"] == "keyword" and rule["state_base"] == "any":
+            delete(sender); get_or_create(sender)
+            return self._triage(sender, message, status_callback)
+        handler = getattr(self, _DISPATCH.get(rule["match_type"], "_exec_triage"))
+        return handler(rule, sender, state, message, status_callback)
+
+    def _exec_triage(self, r, sender, state, message, status_callback):
+        if r["target_state"]:
+            set_state(sender, r["target_state"])
+        return self._triage(sender, message, status_callback)
+
+    def _exec_confirm(self, r, sender, state, message, status_callback):
+        service = state.split(":", 1)[1]
+        set_state(sender, f"active:{service}")
+        return self._active(sender, service, message, intro=True)
+
+    def _exec_deny(self, r, sender, state, message, status_callback):
+        set_state(sender, "triage")
+        return self._triage(sender, message, status_callback)
+
+    def _exec_fallback(self, r, sender, state, message, status_callback):
+        if state.startswith("active:"):
+            return self._active(sender, state.split(":", 1)[1], message)
+        return self._triage(sender, message, status_callback)
+
+    def _exec_keyword(self, r, sender, state, message, status_callback):
+        set_state(sender, r["target_state"])
+        return self._active(sender, r["target_state"].split(":", 1)[1], message, intro=True)
+
+    def _triage(self, sender: str, message: str, status_callback=None) -> str:
+        reply = self._receptionist.generate(f"Conversation so far:\n{self._context(sender)}")
+        m = _ROUTE_RE.search(reply)
+        if m:
+            service, description = m.group(1), m.group(2)
+            if service not in self._specialists and status_callback:
+                status_callback(f"Please wait, creating the {service} specialist...")
+            self._ensure_specialist(service, description)
+            set_state(sender, f"active:{service}")
+            specialist = self._specialists.get(service)
+            if specialist:
+                intro = specialist.generate(f"(The receptionist has connected me to {service}. Introduce yourself and ask how you can help. Mention that the user can say 'new conversation' to go back to the receptionist for a different service.)")
+                add_to_history(sender, "assistant", intro)
+                return intro
+        add_to_history(sender, "assistant", reply)
+        return reply
+
+    def _active(self, sender: str, service: str, message: str, intro: bool = False) -> str:
+        if service not in self._specialists:
+            self._ensure_specialist(service)
+        specialist = self._specialists.get(service)
+        if not specialist:
+            set_state(sender, "triage")
+            return self._triage(sender, message)
+        text = (f"(The receptionist has connected me to {service}. This user has indicated they want help. Introduce yourself and ask how you can help. Mention that the user can say 'new conversation' to go back to the receptionist for a different service.)" if intro
+                else f"Context (conversation with {service}):\n{self._context(sender)}")
+        reply = specialist.generate(text)
+        add_to_history(sender, "assistant", reply)
+        return reply
 
     def _ensure_specialist(self, name: str, description: str | None = None) -> bool:
         if name in self._specialists:
@@ -56,176 +165,26 @@ class Router:
         if self.llm_config.get("mock", False):
             self._specialists[name] = RuleBasedNurse()
             return True
-
         topic = description or name
-        import requests
-        headers = {
-            "Authorization": f"Bearer {self.llm_config.get('api_key', '')}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self.llm_config.get("model", "llama-3.3-70b-versatile"),
-            "messages": [
-                {
-                    "role": "user",
-                    "content": (
-                        f"Write a short system prompt (max 5 sentences, "
-                        f"in English) for an AI assistant that is an expert "
-                        f"in: {topic}. Describe their expertise, their style "
-                        f"of answering, and that they should be concise "
-                        f"(max 3-4 sentences). Only the prompt, no explanation."
-                    ),
-                }
-            ],
-        }
-        resp = requests.post(
-            f"{self.llm_config.get('api_url', 'https://api.groq.com/openai/v1')}/chat/completions",
-            json=payload,
-            headers=headers,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        prompt_text = resp.json()["choices"][0]["message"]["content"]
-
-        path = _PROMPTS_DIR / f"{name}.md"
-        path.write_text(prompt_text.strip())
-
-        adapter = LLMAdapter(self.llm_config, name)
-        self._specialists[name] = adapter
-
-        config_path = _PROMPTS_DIR.parent / "config.json"
-        if config_path.exists():
-            try:
-                cfg = json.loads(config_path.read_text())
-                if "services" not in cfg:
-                    cfg["services"] = {}
-                if name not in cfg["services"]:
-                    cfg["services"][name] = {
-                        "name": name.replace("-", " ").title(),
-                        "prompt": name,
-                        "description": topic,
-                    }
-                    config_path.write_text(json.dumps(cfg, indent=4))
-            except Exception:
-                pass
-
-        return True
-
-    def handle(self, sender: str, message: str, status_callback=None) -> str:
-        conv = get_or_create(sender)
-        state = conv["state"]
-        msg_lower = message.lower().strip()
-
-        add_to_history(sender, "user", message)
-
-        if state not in (STATE_NEW, STATE_TRIAGE):
-            if any(w in msg_lower for w in self._RESET_WORDS):
-                delete(sender)
-                conv = get_or_create(sender)
-                state = STATE_NEW
-
-        if state == STATE_NEW:
-            set_state(sender, STATE_TRIAGE)
-            return self._triage(sender, message, status_callback)
-
-        if state == STATE_TRIAGE:
-            return self._triage(sender, message, status_callback)
-
-        if state.startswith(STATE_OFFERED):
-            return self._handle_offer(sender, state, message)
-
-        if state.startswith(STATE_ACTIVE):
-            service = state.split(":", 1)[1]
-            return self._active(sender, service, message)
-
-        return self._triage(sender, message, status_callback)
-
-    def _triage(self, sender: str, message: str, status_callback=None) -> str:
-        history = get_history(sender)
-        context = "\n".join(
-            f"{'User' if h['role'] == 'user' else 'You'}: {h['content']}"
-            for h in history
-        )
-        reply = self._receptionist.generate(f"Conversation so far:\n{context}")
-        m = _ROUTE_RE.search(reply)
-        if m:
-            service = m.group(1)
-            description = m.group(2)
-            if service not in self._specialists and status_callback:
-                status_callback(
-                    f"Please wait, creating the {service} specialist..."
-                )
-            self._ensure_specialist(service, description)
-            set_state(sender, f"{STATE_ACTIVE}{service}")
-            specialist = self._specialists.get(service)
-            if specialist:
-                intro = specialist.generate(
-                    f"(The receptionist has connected me to {service}. "
-                    f"Introduce yourself and ask how you can help. "
-                    f"Mention that the user can say 'new conversation' to "
-                    f"go back to the receptionist for a different service.)"
-                )
-                add_to_history(sender, "assistant", intro)
-                return intro
-            clean = _ROUTE_RE.sub("", reply).strip()
-            set_state(sender, f"{STATE_OFFERED}{service}")
-            add_to_history(sender, "assistant", clean)
-            return clean
-        add_to_history(sender, "assistant", reply)
-        return reply
-
-    def _handle_offer(self, sender: str, state: str, message: str) -> str:
-        service = state.split(":", 1)[1]
-        msg_lower = message.lower().strip()
-        confirmed = any(
-            w in msg_lower
-            for w in [
-                "yes", "ok", "okay", "please", "connect",
-                "go ahead", "fine", "do it", "sure",
-            ]
-        )
-        denied = any(
-            w in msg_lower
-            for w in ["no", "not", "none", "rather not", "other", "different"]
-        )
-
-        if confirmed:
-            set_state(sender, f"{STATE_ACTIVE}{service}")
-            specialist = self._specialists.get(service)
-            if not specialist:
-                self._ensure_specialist(service)
-                specialist = self._specialists.get(service)
-            if not specialist:
-                set_state(sender, STATE_TRIAGE)
-                return "Sorry, something went wrong while creating this service."
-            intro = specialist.generate(
-                f"(The receptionist has connected me to {service}. "
-                f"This user has indicated they want help. "
-                f"Introduce yourself and ask how you can help. "
-                f"Mention that the user can say 'new conversation' to "
-                f"go back to the receptionist for a different service.)"
+        try:
+            import requests
+            r = requests.post(
+                f"{self.llm_config.get('api_url', 'https://api.groq.com/openai/v1')}/chat/completions",
+                json={"model": self.llm_config.get("model", "llama-3.3-70b-versatile"), "messages": [{"role": "user", "content": f"Write a short system prompt (max 5 sentences, in English) for an AI assistant that is an expert in: {topic}. Describe their expertise, their style of answering, and that they should be concise (max 3-4 sentences). Only the prompt, no explanation."}]},
+                headers={"Authorization": f"Bearer {self.llm_config.get('api_key', '')}", "Content-Type": "application/json"},
+                timeout=30,
             )
-            add_to_history(sender, "assistant", intro)
-            return intro
-
-        set_state(sender, STATE_TRIAGE)
-        return self._triage(sender, message)
-
-    def _active(self, sender: str, service: str, message: str) -> str:
-        specialist = self._specialists.get(service)
-        if not specialist:
-            self._ensure_specialist(service)
-            specialist = self._specialists.get(service)
-        if not specialist:
-            set_state(sender, STATE_TRIAGE)
-            return self._triage(sender, message)
-        history = get_history(sender)
-        context = "\n".join(
-            f"{'User' if h['role'] == 'user' else 'You'}: {h['content']}"
-            for h in history
-        )
-        reply = specialist.generate(
-            f"Context (conversation with {service}):\n{context}"
-        )
-        add_to_history(sender, "assistant", reply)
-        return reply
+            r.raise_for_status()
+            (_PROMPTS_DIR / f"{name}.md").write_text(r.json()["choices"][0]["message"]["content"].strip())
+            self._specialists[name] = LLMAdapter(self.llm_config, name)
+        except:
+            return False
+        cfg_path = _PROMPTS_DIR.parent / "config.json"
+        if cfg_path.exists():
+            try:
+                cfg = json.loads(cfg_path.read_text())
+                if name not in cfg.setdefault("services", {}):
+                    cfg["services"][name] = {"name": name.replace("-", " ").title(), "prompt": name, "description": topic}
+                    cfg_path.write_text(json.dumps(cfg, indent=4))
+            except: pass
+        return True

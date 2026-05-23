@@ -1,29 +1,21 @@
 # DDR — Autonome AI-Hulpservice (Service Frank)
 
 ## Architectuur
-- `src/server.py` — FastAPI + async background dispatcher + Web UI op `/`
-- `src/router.py` — **Router**: receptionist (LLM) bepaalt welke dienst, biedt aan, schakelt over
-- `src/conversation.py` — State machine per afzender: `new → triage → offered → active`
-- `src/nurse.py` — LLMAdapter (OpenAI-compat) + RuleBasedNurse (deterministische mock-fallback)
+- `src/server.py` — FastAPI + event-driven async dispatch + Web UI op `/`
+- `src/router.py` — **Data-Driven Router**: alle transities uit `routing_rules` in SQLite
+- `src/conversation.py` — SQLite-backed state machine (`new → triage → active`)
+- `src/nurse.py` — LLMAdapter (OpenAI-compat) + RuleBasedNurse (mock/fallback)
 - `src/signal_sender.py` — Signal REST API uitgaand (`POST /v2/send`)
-- `src/init_db.py` — SQLite schema: `message_queue` + `conversations`
+- `src/init_db.py` — SQLite schema + `db_conn()` contextmanager + pragma optimalisaties
 - `src/config.py` — JSON-config loader
+- `static/index.html` — Web UI (geserveerd via `FileResponse`)
 
-## Dynamische specialisten
-- Receptionist output `[ROUTE:dienst:beschrijving]`
-- Als dienst niet bestaat → LLM genereert systeemprompt → `prompts/{dienst}.md` → nieuwe LLMAdapter
-- Nieuwe dienst wordt permanent opgeslagen in `config.json` (overleeft herstart)
-- Bestaande specialisten staan in `config.json` onder `services`
-- `nieuw gesprek` reset naar receptionist
-
-## Prompts
-- `prompts/receptionist.md` — receptionist (alleen routeren, geen advies)
-- `prompts/system_prompt.md` — AI-nurse (medisch)
-- `prompts/tech_support.md` — AI-tech
-- `prompts/beleggingsadviseur.md` — beleggingsadviseur
-- `prompts/programmeur.md` — programmeur/software
-- `prompts/fluidyne.md` — Fluidyne Stirling specialist
-- Alle andere `prompts/{naam}.md` worden dynamisch gegenereerd
+## Routing
+- Alle transities staan in `routing_rules` tabel (niet hardcoded in Python)
+- `Router._load_rules()` cached regels in geheugen bij eerste gebruik
+- `match_type`: `auto`, `llm_route`, `keyword`, `confirm`, `deny`, `fallback`
+- Receptionist detecteert `[ROUTE:dienst:beschrijving]` in LLM output
+- Nieuwe specialisten dynamisch aangemaakt via `_ensure_specialist()` → LLM genereert prompt → opslag in `prompts/{naam}.md` + `config.json`
 
 ## Signaal-nummer
 - Service: `+233594051553` (router-SIM, profielnaam "Service Frank")
@@ -33,6 +25,12 @@
 ## LLM
 - `config.json` — Groq, `llama-3.3-70b-versatile` (gratis tier)
 - Fallback: OpenCode Zen Big Pickle (auto-detect key uit `~/.local/share/opencode/auth.json`)
+
+## Performance
+- Routing rules gecached (0 DB queries per bericht)
+- Parallelle dispatch via `asyncio.create_task(asyncio.to_thread(...))`
+- Event-driven (`asyncio.Event`) — geen polling, directe trigger bij `_queue_message`
+- SQLite pragma's: `WAL`, `synchronous=NORMAL`, `busy_timeout=5000`, `cache_size=-20000`
 
 ## Testen
 ```bash
