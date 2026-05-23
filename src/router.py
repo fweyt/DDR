@@ -1,4 +1,5 @@
 import re
+import threading
 from pathlib import Path
 
 from .conversation import add_to_history, delete, get_history, get_or_create, set_state
@@ -14,7 +15,7 @@ _DEFAULT_RULES = [
     ("triage", "llm_route", "", "", "", "", 0),
     ("offered", "confirm", "yes,ok,okay,please,connect,go ahead,fine,do it,sure", "active:same", "", "", 20),
     ("offered", "deny", "no,not,none,rather not,other,different", "triage", "", "", 20),
-    ("active", "fallback", "", "", "", "", 0),
+    ("active", "fallback", "", "", "", "", 99),
 ]
 
 _DISPATCH = {
@@ -31,6 +32,7 @@ class Router:
     def __init__(self, config: dict) -> None:
         self.llm_config = config.get("llm", {})
         self._rules_cache: tuple | None = None
+        self._cache_lock = threading.Lock()
         self._persona_cache: dict[str, str] = {}
         mock = self.llm_config.get("mock", False)
         self._receptionist = RuleBasedNurse() if mock else LLMAdapter(self.llm_config, "receptionist")
@@ -39,6 +41,8 @@ class Router:
         if not mock:
             with db_conn() as conn:
                 for row in conn.execute("SELECT DISTINCT target_state, specialist_name, prompt_file FROM routing_rules WHERE target_state LIKE 'active:%'"):
+                    if not row[0] or ":" not in row[0]:
+                        continue
                     svc = row[0].split(":", 1)[1]
                     if svc not in self._specialists:
                         self._specialists[svc] = LLMAdapter(self.llm_config, row[2] or svc)
@@ -62,20 +66,23 @@ class Router:
                     "INSERT INTO routing_rules (state_base,match_type,match_value,target_state,specialist_name,prompt_file,priority) VALUES ('triage','keyword',?,?,?,?,5)",
                     (keywords, f"active:{name}", name.replace("-", " ").title(), prompt_file or name),
                 )
-        self._rules_cache = None
+        with self._cache_lock:
+            self._rules_cache = None
         self._persona_cache[name] = name.replace("-", " ").title()
 
     def _load_rules(self) -> tuple:
-        if self._rules_cache is not None:
-            return self._rules_cache
+        with self._cache_lock:
+            if self._rules_cache is not None:
+                return self._rules_cache
         with db_conn() as conn:
             conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
             any_rules = list(conn.execute("SELECT * FROM routing_rules WHERE state_base='any' AND match_type='keyword' ORDER BY priority"))
             state_rules = {}
             for sb in {r["state_base"] for r in conn.execute("SELECT state_base FROM routing_rules WHERE state_base!='any'")}:
                 state_rules[sb] = list(conn.execute("SELECT * FROM routing_rules WHERE state_base=? ORDER BY priority", (sb,)))
-        self._rules_cache = (any_rules, state_rules)
-        return self._rules_cache
+        with self._cache_lock:
+            self._rules_cache = (any_rules, state_rules)
+            return self._rules_cache
 
     def _find_rule(self, state_base: str, msg_lower: str) -> dict | None:
         any_rules, state_rules = self._load_rules()
@@ -83,13 +90,15 @@ class Router:
             for kw in row["match_value"].split(","):
                 if kw.strip() and kw.strip() in msg_lower:
                     return row
-        for row in state_rules.get(state_base, []):
-            mt, mv = row["match_type"], row["match_value"]
-            if mt in ("auto", "llm_route", "fallback"):
+        rules = state_rules.get(state_base, [])
+        for row in rules:
+            if row["match_type"] == "keyword" and row["match_value"]:
+                for kw in row["match_value"].split(","):
+                    if kw.strip() and kw.strip() in msg_lower:
+                        return row
+        for row in rules:
+            if row["match_type"] in ("auto", "llm_route", "fallback"):
                 return row
-            for kw in mv.split(","):
-                if kw.strip() and kw.strip() in msg_lower:
-                    return row
         return None
 
     def _context(self, sender: str) -> str:
@@ -103,7 +112,7 @@ class Router:
         rule = self._find_rule(state.split(":")[0] if ":" in state else state, msg_lower)
         if rule:
             return self._execute_rule(rule, sender, state, message, status_callback)
-        if state.startswith("active:"):
+        if state.startswith("active:") and ":" in state:
             return self._active(sender, state.split(":", 1)[1], message)
         set_state(sender, "triage")
         return self._triage(sender, message, status_callback)
@@ -121,6 +130,9 @@ class Router:
         return self._triage(sender, message, status_callback)
 
     def _exec_confirm(self, r, sender, state, message, status_callback):
+        if ":" not in state:
+            set_state(sender, "triage")
+            return self._triage(sender, message, status_callback)
         service = state.split(":", 1)[1]
         set_state(sender, f"active:{service}")
         return self._active(sender, service, message, intro=True)
@@ -130,13 +142,16 @@ class Router:
         return self._triage(sender, message, status_callback)
 
     def _exec_fallback(self, r, sender, state, message, status_callback):
-        if state.startswith("active:"):
+        if state.startswith("active:") and ":" in state:
             return self._active(sender, state.split(":", 1)[1], message)
         return self._triage(sender, message, status_callback)
 
     def _exec_keyword(self, r, sender, state, message, status_callback):
-        set_state(sender, r["target_state"])
-        return self._active(sender, r["target_state"].split(":", 1)[1], message, intro=True)
+        target = r["target_state"]
+        set_state(sender, target)
+        if target.startswith("active:") and ":" in target:
+            return self._active(sender, target.split(":", 1)[1], message, intro=True)
+        return self._triage(sender, message, status_callback)
 
     def _triage(self, sender: str, message: str, status_callback=None) -> str:
         reply = self._receptionist.generate(f"Conversation so far:\n{self._context(sender)}")
