@@ -1,4 +1,3 @@
-import json
 import re
 from pathlib import Path
 
@@ -31,16 +30,20 @@ _DISPATCH = {
 class Router:
     def __init__(self, config: dict) -> None:
         self.llm_config = config.get("llm", {})
-        self.services = config.get("services", {})
         self._rules_cache: tuple | None = None
+        self._persona_cache: dict[str, str] = {}
         mock = self.llm_config.get("mock", False)
-        if mock:
-            self._receptionist = RuleBasedNurse()
-            self._specialists: dict = {n: RuleBasedNurse() for n in self.services}
-        else:
-            self._receptionist = LLMAdapter(self.llm_config, "receptionist")
-            self._specialists: dict = {n: LLMAdapter(self.llm_config, s.get("prompt", n)) for n, s in self.services.items()}
+        self._receptionist = RuleBasedNurse() if mock else LLMAdapter(self.llm_config, "receptionist")
+        self._specialists: dict = {}
         self._ensure_default_rules()
+        if not mock:
+            with db_conn() as conn:
+                for row in conn.execute("SELECT DISTINCT target_state, specialist_name, prompt_file FROM routing_rules WHERE target_state LIKE 'active:%'"):
+                    svc = row[0].split(":", 1)[1]
+                    if svc not in self._specialists:
+                        self._specialists[svc] = LLMAdapter(self.llm_config, row[2] or svc)
+                        if row[1]:
+                            self._persona_cache[svc] = row[1]
 
     def _ensure_default_rules(self) -> None:
         with db_conn() as conn:
@@ -49,25 +52,18 @@ class Router:
                     "INSERT INTO routing_rules (state_base,match_type,match_value,target_state,specialist_name,prompt_file,priority) VALUES (?,?,?,?,?,?,?)",
                     _DEFAULT_RULES,
                 )
-            for svc_name, svc_cfg in self.services.items():
-                keywords = svc_name.lower().replace("-", " ").replace("_", " ")
-                exists = conn.execute("SELECT 1 FROM routing_rules WHERE state_base='triage' AND match_type='keyword' AND match_value=?", (keywords,)).fetchone()
-                if not exists:
-                    conn.execute(
-                        "INSERT INTO routing_rules (state_base,match_type,match_value,target_state,specialist_name,prompt_file,priority) VALUES ('triage','keyword',?,?,?,?,5)",
-                        (keywords, f"active:{svc_name}", svc_cfg.get("name", svc_name), svc_cfg.get("prompt", svc_name)),
-                    )
 
-    def _register_specialist_in_db(self, name: str, topic: str) -> None:
+    def _register_specialist_in_db(self, name: str, topic: str, prompt_file: str | None = None) -> None:
         keywords = name.lower().replace("-", " ").replace("_", " ")
         with db_conn() as conn:
             exists = conn.execute("SELECT 1 FROM routing_rules WHERE state_base='triage' AND match_type='keyword' AND match_value=?", (keywords,)).fetchone()
             if not exists:
                 conn.execute(
                     "INSERT INTO routing_rules (state_base,match_type,match_value,target_state,specialist_name,prompt_file,priority) VALUES ('triage','keyword',?,?,?,?,5)",
-                    (keywords, f"active:{name}", name.replace("-", " ").title(), name),
+                    (keywords, f"active:{name}", name.replace("-", " ").title(), prompt_file or name),
                 )
         self._rules_cache = None
+        self._persona_cache[name] = name.replace("-", " ").title()
 
     def _load_rules(self) -> tuple:
         if self._rules_cache is not None:
@@ -192,13 +188,8 @@ class Router:
             self._specialists[name] = LLMAdapter(self.llm_config, name)
         except:
             return False
-        cfg_path = _PROMPTS_DIR.parent / "config.json"
-        if cfg_path.exists():
-            try:
-                cfg = json.loads(cfg_path.read_text())
-                if name not in cfg.setdefault("services", {}):
-                    cfg["services"][name] = {"name": name.replace("-", " ").title(), "prompt": name, "description": topic}
-                    cfg_path.write_text(json.dumps(cfg, indent=4))
-            except: pass
         self._register_specialist_in_db(name, topic)
         return True
+
+    def get_specialist_name(self, service: str) -> str:
+        return self._persona_cache.get(service) or service.replace("-", " ").title()

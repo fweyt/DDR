@@ -8,6 +8,5 @@
     "signal": {
         "api_url": "http://localhost:8080",
         "number": "+32XXXXXXXXX"
-    },
-    "services": {}
+    }
 }

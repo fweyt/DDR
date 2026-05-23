@@ -107,11 +107,7 @@ async def chat_websocket(websocket: WebSocket):
                     asyncio.run_coroutine_threadsafe(websocket.send_json({"status": msg}), loop)
                 reply = await asyncio.to_thread(_router.handle, sender, data.get("text", ""), progress)
                 state = get_or_create(sender)["state"]
-                if state.startswith("active:"):
-                    s = state.split(":", 1)[1]
-                    persona = config.get("services", {}).get(s, {}).get("name", "Assistent")
-                else:
-                    persona = "Receptionist"
+                persona = _router.get_specialist_name(state.split(":", 1)[1]) if state.startswith("active:") else "Receptionist"
                 await websocket.send_json({"text": reply, "sender": persona})
             except Exception as e:
                 await websocket.send_json({"error": str(e)})

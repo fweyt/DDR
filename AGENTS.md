@@ -15,7 +15,8 @@
 - `Router._load_rules()` cached regels in geheugen bij eerste gebruik
 - `match_type`: `auto`, `llm_route`, `keyword`, `confirm`, `deny`, `fallback`
 - Receptionist detecteert `[ROUTE:dienst:beschrijving]` in LLM output
-- Nieuwe specialisten dynamisch aangemaakt via `_ensure_specialist()` → LLM genereert prompt → opslag in `prompts/{naam}.md` + `config.json`
+- Nieuwe specialisten dynamisch aangemaakt via `_ensure_specialist()` → LLM genereert prompt → opslag in `prompts/{naam}.md` + `routing_rules` tabel
+- Specialisten worden bij startup uit `routing_rules` geladen (geen services-sectie in config.json)
 
 ## Signaal-nummer
 - Service: `+233594051553` (router-SIM, profielnaam "Service Frank")
