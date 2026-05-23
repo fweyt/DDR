@@ -26,7 +26,7 @@ def test_llm_adapter_sends_correct_payload():
     assert reply == "Raadpleeg je huisarts."
 
     call_args = mock_post.call_args
-    assert call_args[0][0] == "http://test-llm.local/v1/chat/completions"
+    assert call_args[0][0] == "http://test-llm.local/chat/completions"
     payload = call_args[1]["json"]
     assert payload["model"] == "test-model"
     assert payload["messages"][1]["content"] == "Ik heb al dagen hoofdpijn."

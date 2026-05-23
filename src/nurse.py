@@ -61,7 +61,7 @@ class LLMAdapter:
         }
         try:
             resp = requests.post(
-                f"{self.api_url}/v1/chat/completions",
+                f"{self.api_url}/chat/completions",
                 json=payload,
                 headers=headers,
                 timeout=60,
